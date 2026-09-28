@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ClipboardEvent } from 'react'
+import { useEffect, useRef, useState, type ClipboardEvent, type FormEvent } from 'react'
 import * as Tesseract from 'tesseract.js'
 import './App.css'
 
@@ -103,7 +103,25 @@ function App() {
   const [status, setStatus] = useState('waiting for an image')
   const [dragging, setDragging] = useState(false)
   const [prevUrl, setPrevUrl] = useState<string | null>(null)
+  const [imgUrl, setImgUrl] = useState('')
   const runRef = useRef<(file: File) => Promise<void>>(async () => {})
+
+  const onUrl = (e: FormEvent) => {
+    e.preventDefault()
+    const url = imgUrl.trim()
+    if (!/^https?:\/\//i.test(url)) {
+      setStatus('enter a valid image URL (starts with http:// or https://)')
+      return
+    }
+    setStatus('fetching image link')
+    void fileFromUrl(url)
+      .then((f) => run(f))
+      .catch((err: unknown) => {
+        console.error(err)
+        const msg = err instanceof Error ? err.message : String(err)
+        setStatus('url load failed: ' + (msg.includes('url load failed') ? 'fetch or content-type rejected' : msg) + ' (CORS-blocked sites: open link in a new tab, then paste or upload)')
+      })
+  }
 
   const onPaste = (e: ClipboardEvent) => {
     const items = Array.from(e.clipboardData.items)
@@ -267,6 +285,15 @@ function App() {
         />
         choose an image
       </label>
+      <form className="url" onSubmit={onUrl}>
+        <input
+          type="text"
+          value={imgUrl}
+          onChange={(e) => setImgUrl(e.target.value)}
+          placeholder="...or paste a direct image URL here"
+        />
+        <button type="submit">load from URL</button>
+      </form>
       <p className="status">{status}</p>
       <p className={dragging ? 'hint hint-active' : 'hint'}>
         ...or press Ctrl+V to paste, or drop an image here (file or another tab)

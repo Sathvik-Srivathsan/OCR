@@ -25,6 +25,31 @@
   color: var(--muted, #667);
 }
 
+.url {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+
+.url input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--accent, #446);
+  border-radius: 6px;
+  font-family: monospace;
+  box-sizing: border-box;
+}
+
+.url button {
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--accent, #446);
+  border-radius: 6px;
+  background: var(--accent, #446);
+  color: var(--bg, #fff);
+  cursor: pointer;
+}
+
 .hint {
   font-family: monospace;
   color: var(--muted, #667);
