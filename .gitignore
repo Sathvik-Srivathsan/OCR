@@ -1,0 +1,9 @@
+.opencode/
+*.jpg
+*.jpeg
+*.png
+*.pdf
+*.tiff
+*.bmp
+.DS_Store
+Thumbs.db

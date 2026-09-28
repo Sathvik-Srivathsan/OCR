@@ -1,0 +1,40 @@
+.spike {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 2rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.file {
+  display: inline-block;
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--accent, #446);
+  border-radius: 6px;
+  cursor: pointer;
+  align-self: flex-start;
+}
+
+.file input {
+  display: none;
+}
+
+.status {
+  font-family: monospace;
+  color: var(--muted, #667);
+}
+
+.preview {
+  max-width: 100%;
+  border: 1px solid var(--muted, #667);
+  border-radius: 6px;
+}
+
+textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: monospace;
+  border-radius: 6px;
+  padding: 0.5rem;
+}
