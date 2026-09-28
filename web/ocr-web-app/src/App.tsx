@@ -1,8 +1,12 @@
-import { useRef, useState } from 'react'
+import { useState, type ClipboardEvent, type DragEvent } from 'react'
 import * as Tesseract from 'tesseract.js'
 import './App.css'
 
 const MAX_DIM = 4000
+
+const isImage = (file: File | null | undefined): file is File => {
+  return !!file && file.type.startsWith('image/')
+}
 
 const upscale = (img: HTMLImageElement): HTMLCanvasElement => {
   const max = Math.max(img.naturalWidth, img.naturalHeight)
@@ -61,66 +65,106 @@ function App() {
   const [text, setText] = useState('')
   const [preview, setPreview] = useState('')
   const [status, setStatus] = useState('waiting for an image')
-  const prevUrl = useRef<string | null>(null)
+  const [dragging, setDragging] = useState(false)
+  const [prevUrl, setPrevUrl] = useState<string | null>(null)
+
+  const onPaste = (e: ClipboardEvent) => {
+    const items = Array.from(e.clipboardData.items)
+    const item = items.find((i) => i.type.startsWith('image/'))
+    const file = item?.getAsFile()
+    if (isImage(file)) {
+      e.preventDefault()
+      setStatus('added pasted image')
+      void run(file)
+    } else {
+      setStatus('clipboard has no image')
+    }
+  }
+
+  const onDrop = (e: DragEvent) => {
+    e.preventDefault()
+    setDragging(false)
+    const file = e.dataTransfer.files?.[0]
+    if (isImage(file)) {
+      setStatus('added dropped image')
+      void run(file)
+    } else {
+      setStatus('not an image file')
+    }
+  }
 
   const run = async (file: File) => {
-    const url = URL.createObjectURL(file)
-    if (prevUrl.current) URL.revokeObjectURL(prevUrl.current)
-    prevUrl.current = url
-    setPreview(url)
-    setStatus('loading image')
-    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const el = new Image()
-      el.onload = () => resolve(el)
-      el.onerror = () => reject(new Error('image load failed'))
-      el.src = url
-    })
-    const canvas = upscale(img)
-    setStatus('loading Tesseract.js worker + eng')
-    const worker = await Tesseract.createWorker('eng', Tesseract.OEM.LSTM_ONLY, {
-      logger: (m) => {
-        console.log(m.status, Math.round(m.progress * 100) + '%')
-        setStatus(m.status + ' ' + Math.round(m.progress * 100) + '%')
-      },
-    })
     try {
-      setStatus('pass 1 of 2: PSM SINGLE_BLOCK')
-      await worker.setParameters({
-        tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK,
-        preserve_interword_spaces: '1',
+      const url = URL.createObjectURL(file)
+      if (prevUrl) URL.revokeObjectURL(prevUrl)
+      setPrevUrl(url)
+      setPreview(url)
+      setStatus('loading image')
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const el = new Image()
+        el.onload = () => resolve(el)
+        el.onerror = () => reject(new Error('image load failed'))
+        el.src = url
       })
-      const pass1 = await worker.recognize(canvas, {}, { hocr: true })
-      setStatus('pass 2 of 2: PSM AUTO')
-      await worker.setParameters({
-        tessedit_pageseg_mode: Tesseract.PSM.AUTO,
-        preserve_interword_spaces: '1',
+      const canvas = upscale(img)
+      setStatus('loading Tesseract.js worker + eng')
+      const worker = await Tesseract.createWorker('eng', Tesseract.OEM.LSTM_ONLY, {
+        logger: (m) => {
+          console.log(m.status, Math.round(m.progress * 100) + '%')
+          setStatus(m.status + ' ' + Math.round(m.progress * 100) + '%')
+        },
       })
-      const pass2 = await worker.recognize(canvas, {}, { hocr: true })
-      const results = [
-        {
-          label: 'SINGLE_BLOCK',
-          confidence: pass1.data.confidence,
-          text: fromHocr(pass1.data.hocr || '', pass1.data.text),
-        },
-        {
-          label: 'AUTO',
-          confidence: pass2.data.confidence,
-          text: fromHocr(pass2.data.hocr || '', pass2.data.text),
-        },
-      ]
-      results.forEach((r) => console.log(r.label, 'conf', r.confidence))
-      const winner = results.reduce((a, b) => (b.confidence >= a.confidence ? b : a))
-      console.log(winner.label, 'wins')
-      console.log(winner.text)
-      setText(winner.text)
-      setStatus('done: ' + winner.label + ' conf ' + winner.confidence.toFixed(0))
-    } finally {
-      await worker.terminate()
+      try {
+        setStatus('pass 1 of 2: PSM SINGLE_BLOCK')
+        await worker.setParameters({
+          tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK,
+          preserve_interword_spaces: '1',
+        })
+        const pass1 = await worker.recognize(canvas, {}, { hocr: true })
+        setStatus('pass 2 of 2: PSM AUTO')
+        await worker.setParameters({
+          tessedit_pageseg_mode: Tesseract.PSM.AUTO,
+          preserve_interword_spaces: '1',
+        })
+        const pass2 = await worker.recognize(canvas, {}, { hocr: true })
+        const results = [
+          {
+            label: 'SINGLE_BLOCK',
+            confidence: pass1.data.confidence,
+            text: fromHocr(pass1.data.hocr || '', pass1.data.text),
+          },
+          {
+            label: 'AUTO',
+            confidence: pass2.data.confidence,
+            text: fromHocr(pass2.data.hocr || '', pass2.data.text),
+          },
+        ]
+        results.forEach((r) => console.log(r.label, 'conf', r.confidence))
+        const winner = results.reduce((a, b) => (b.confidence >= a.confidence ? b : a))
+        console.log(winner.label, 'wins')
+        console.log(winner.text)
+        setText(winner.text)
+        setStatus('done: ' + winner.label + ' conf ' + winner.confidence.toFixed(0))
+      } finally {
+        await worker.terminate()
+      }
+    } catch (err) {
+      console.error(err)
+      setStatus('failed: ' + (err instanceof Error ? err.message : String(err)))
     }
   }
 
   return (
-    <main className="spike">
+    <main
+      className="spike"
+      onPaste={onPaste}
+      onDragOver={(e) => {
+        e.preventDefault()
+        setDragging(true)
+      }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={onDrop}
+    >
       <h1>OCR spike: local image to text</h1>
       <label className="file">
         <input
@@ -128,12 +172,20 @@ function App() {
           accept="image/*"
           onChange={(e) => {
             const file = e.target.files?.[0]
-            if (file) run(file)
+            if (isImage(file)) {
+              setStatus('added file')
+              void run(file)
+            } else {
+              setStatus('not an image file')
+            }
           }}
         />
         choose an image
       </label>
       <p className="status">{status}</p>
+      <p className={dragging ? 'hint hint-active' : 'hint'}>
+        ...or press Ctrl+V to paste, or drop an image here
+      </p>
       {preview && <img className="preview" src={preview} alt="source image" />}
       <textarea value={text} readOnly rows={10} placeholder="recognized text appears here" />
     </main>

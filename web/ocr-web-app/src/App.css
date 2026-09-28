@@ -25,6 +25,16 @@
   color: var(--muted, #667);
 }
 
+.hint {
+  font-family: monospace;
+  color: var(--muted, #667);
+}
+
+.hint-active {
+  color: var(--accent, #446);
+  font-weight: bold;
+}
+
 .preview {
   max-width: 100%;
   border: 1px solid var(--muted, #667);
