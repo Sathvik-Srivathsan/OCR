@@ -35,13 +35,37 @@ const fileFromUrl = async (url: string): Promise<File> => {
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
     return new File([bytes], 'clipboard-image', { type: mime })
   }
-  const res = await fetch(url, { mode: 'cors' })
+  let res: Response
+  try {
+    res = await fetch(url, { mode: 'cors' })
+  } catch (err) {
+    throw new Error(
+      'url load failed (network or CORS: ' +
+        (err instanceof Error ? err.message : String(err)) +
+        ')',
+    )
+  }
   if (!res.ok) throw new Error('url load failed (fetch ' + res.status + ')')
-  if (!(res.headers.get('content-type') || '').startsWith('image/')) {
+  const ct = res.headers.get('content-type') || ''
+  if (ct.startsWith('text/html')) {
+    throw new Error('url is a webpage, not a direct image')
+  }
+  if (!ct.startsWith('image/')) {
     throw new Error('url load failed (not an image)')
   }
   const blob = await res.blob()
   return new File([blob], 'dropped-image', { type: blob.type || 'image/png' })
+}
+
+const urlLoadStatus = (err: unknown): string => {
+  const msg = err instanceof Error ? err.message : String(err)
+  if (msg.includes('webpage, not a direct image')) {
+    return `that's a webpage, not a direct image — right-click the image → 'Copy image address'`
+  }
+  if (msg.startsWith('url load failed')) {
+    return "this host blocks cross-site reading\nright-click the image -> 'Copy image' -> Ctrl+V, or Save image -> upload"
+  }
+  return 'failed: ' + msg
 }
 
 const upscale = (img: HTMLImageElement): HTMLCanvasElement => {
@@ -118,8 +142,7 @@ function App() {
       .then((f) => run(f))
       .catch((err: unknown) => {
         console.error(err)
-        const msg = err instanceof Error ? err.message : String(err)
-        setStatus('url load failed: ' + (msg.includes('url load failed') ? 'fetch or content-type rejected' : msg) + ' (CORS-blocked sites: open link in a new tab, then paste or upload)')
+        setStatus(urlLoadStatus(err))
       })
   }
 
@@ -197,13 +220,10 @@ function App() {
       setStatus('failed: ' + (err instanceof Error ? err.message : String(err)))
     }
   }
-  runRef.current = run
 
   useEffect(() => {
     runRef.current = run
-  })
 
-  useEffect(() => {
     const onDragOver = (e: DragEvent) => {
       e.preventDefault()
     }
@@ -213,7 +233,6 @@ function App() {
       setDragging(false)
       const dt = e.dataTransfer
       const files = dt?.files
-      console.log('drop: files', files?.length, files?.[0]?.name, files?.[0]?.type)
       const file =
         files?.[0] ?? dt?.items?.[0]?.getAsFile() ?? undefined
       if (isImage(file)) {
@@ -228,24 +247,20 @@ function App() {
           .then((f) => runRef.current(f))
           .catch((err: unknown) => {
             console.error(err)
-            const msg = err instanceof Error ? err.message : String(err)
-            setStatus(msg.includes('url load failed')
-              ? 'CORS-blocked: open link in a new tab, then paste or upload'
-              : 'failed: ' + msg)
+            setStatus(urlLoadStatus(err))
           })
         return
       }
       setStatus('not an image drop')
     }
     const onDragEnter = (e: DragEvent) => {
-      console.log('dragenter: types', e.dataTransfer?.types)
       const types = Array.from(e.dataTransfer?.types ?? [])
       if (types.includes('Files') || types.includes('text/uri-list') || types.includes('text/html')) {
         setDragging(true)
       }
     }
     const onDragLeave = (e: DragEvent) => {
-      console.log('dragleave')
+      if (e.relatedTarget) return
       const types = Array.from(e.dataTransfer?.types ?? [])
       if (types.includes('Files') || types.includes('text/uri-list') || types.includes('text/html')) {
         setDragging(false)
@@ -262,6 +277,8 @@ function App() {
       document.removeEventListener('dragleave', onDragLeave)
     }
   }, [])
+
+  const [statusMain, ...statusAdvice] = status.split('\n')
 
   return (
     <main
@@ -294,7 +311,14 @@ function App() {
         />
         <button type="submit">load from URL</button>
       </form>
-      <p className="status">{status}</p>
+      <p className="status">{statusMain}
+        {statusAdvice.length > 0 && (
+          <>
+            <br />
+            <span className="status-advice">{statusAdvice.join('\n')}</span>
+          </>
+        )}
+      </p>
       <p className={dragging ? 'hint hint-active' : 'hint'}>
         ...or press Ctrl+V to paste, or drop an image here (file or another tab)
       </p>

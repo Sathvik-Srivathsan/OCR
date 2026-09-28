@@ -25,6 +25,13 @@
   color: var(--muted, #667);
 }
 
+.status-advice {
+  display: block;
+  font-size: 0.5em;
+  margin-top: 0.25em;
+  color: var(--muted, #889);
+}
+
 .url {
   display: flex;
   gap: 0.5rem;
