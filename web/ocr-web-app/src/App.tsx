@@ -1,11 +1,47 @@
-import { useState, type ClipboardEvent, type DragEvent } from 'react'
+import { useEffect, useRef, useState, type ClipboardEvent } from 'react'
 import * as Tesseract from 'tesseract.js'
 import './App.css'
 
 const MAX_DIM = 4000
 
+const IMAGE_EXT = /\.(avif|bmp|gif|jpe?g|png|tiff?|webp)$/i
+
 const isImage = (file: File | null | undefined): file is File => {
-  return !!file && file.type.startsWith('image/')
+  return (
+    !!file &&
+    (file.type.startsWith('image/') || IMAGE_EXT.test(file.name))
+  )
+}
+
+const imgUrlFromDrop = (dt: DataTransfer): string | undefined => {
+  const uriList = dt.getData('text/uri-list')?.trim()
+  const uri = uriList?.split('\n').map((l) => l.trim())[0]
+  if (uri && /^https?:\/\//i.test(uri)) return uri
+  const html = dt.getData('text/html')
+  if (html) {
+    const doc = new DOMParser().parseFromString(html, 'text/html')
+    const src = doc.querySelector('img[src]')?.getAttribute('src')
+    if (src && /^https?:\/\//i.test(src)) return src
+  }
+  return undefined
+}
+
+const fileFromUrl = async (url: string): Promise<File> => {
+  if (url.startsWith('data:')) {
+    const [head, b64 = ''] = url.split(',')
+    const mime = /^data:([^;,]+)/.exec(head)?.[1] || 'image/png'
+    const bin = atob(b64)
+    const bytes = new Uint8Array(bin.length)
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+    return new File([bytes], 'clipboard-image', { type: mime })
+  }
+  const res = await fetch(url, { mode: 'cors' })
+  if (!res.ok) throw new Error('url load failed (fetch ' + res.status + ')')
+  if (!(res.headers.get('content-type') || '').startsWith('image/')) {
+    throw new Error('url load failed (not an image)')
+  }
+  const blob = await res.blob()
+  return new File([blob], 'dropped-image', { type: blob.type || 'image/png' })
 }
 
 const upscale = (img: HTMLImageElement): HTMLCanvasElement => {
@@ -67,29 +103,19 @@ function App() {
   const [status, setStatus] = useState('waiting for an image')
   const [dragging, setDragging] = useState(false)
   const [prevUrl, setPrevUrl] = useState<string | null>(null)
+  const runRef = useRef<(file: File) => Promise<void>>(async () => {})
 
   const onPaste = (e: ClipboardEvent) => {
     const items = Array.from(e.clipboardData.items)
-    const item = items.find((i) => i.type.startsWith('image/'))
-    const file = item?.getAsFile()
-    if (isImage(file)) {
+    const file = items
+      .map((i) => i.getAsFile())
+      .find((f): f is File => isImage(f))
+    if (file) {
       e.preventDefault()
       setStatus('added pasted image')
       void run(file)
     } else {
       setStatus('clipboard has no image')
-    }
-  }
-
-  const onDrop = (e: DragEvent) => {
-    e.preventDefault()
-    setDragging(false)
-    const file = e.dataTransfer.files?.[0]
-    if (isImage(file)) {
-      setStatus('added dropped image')
-      void run(file)
-    } else {
-      setStatus('not an image file')
     }
   }
 
@@ -153,17 +179,76 @@ function App() {
       setStatus('failed: ' + (err instanceof Error ? err.message : String(err)))
     }
   }
+  runRef.current = run
+
+  useEffect(() => {
+    runRef.current = run
+  })
+
+  useEffect(() => {
+    const onDragOver = (e: DragEvent) => {
+      e.preventDefault()
+    }
+    const onDrop = (e: DragEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      setDragging(false)
+      const dt = e.dataTransfer
+      const files = dt?.files
+      console.log('drop: files', files?.length, files?.[0]?.name, files?.[0]?.type)
+      const file =
+        files?.[0] ?? dt?.items?.[0]?.getAsFile() ?? undefined
+      if (isImage(file)) {
+        setStatus('added dropped image')
+        void runRef.current(file)
+        return
+      }
+      const url = dt ? imgUrlFromDrop(dt) : undefined
+      if (url) {
+        setStatus('added dropped image link')
+        void fileFromUrl(url)
+          .then((f) => runRef.current(f))
+          .catch((err: unknown) => {
+            console.error(err)
+            const msg = err instanceof Error ? err.message : String(err)
+            setStatus(msg.includes('url load failed')
+              ? 'CORS-blocked: open link in a new tab, then paste or upload'
+              : 'failed: ' + msg)
+          })
+        return
+      }
+      setStatus('not an image drop')
+    }
+    const onDragEnter = (e: DragEvent) => {
+      console.log('dragenter: types', e.dataTransfer?.types)
+      const types = Array.from(e.dataTransfer?.types ?? [])
+      if (types.includes('Files') || types.includes('text/uri-list') || types.includes('text/html')) {
+        setDragging(true)
+      }
+    }
+    const onDragLeave = (e: DragEvent) => {
+      console.log('dragleave')
+      const types = Array.from(e.dataTransfer?.types ?? [])
+      if (types.includes('Files') || types.includes('text/uri-list') || types.includes('text/html')) {
+        setDragging(false)
+      }
+    }
+    document.addEventListener('dragover', onDragOver)
+    document.addEventListener('drop', onDrop)
+    document.addEventListener('dragenter', onDragEnter)
+    document.addEventListener('dragleave', onDragLeave)
+    return () => {
+      document.removeEventListener('dragover', onDragOver)
+      document.removeEventListener('drop', onDrop)
+      document.removeEventListener('dragenter', onDragEnter)
+      document.removeEventListener('dragleave', onDragLeave)
+    }
+  }, [])
 
   return (
     <main
       className="spike"
       onPaste={onPaste}
-      onDragOver={(e) => {
-        e.preventDefault()
-        setDragging(true)
-      }}
-      onDragLeave={() => setDragging(false)}
-      onDrop={onDrop}
     >
       <h1>OCR spike: local image to text</h1>
       <label className="file">
@@ -184,7 +269,7 @@ function App() {
       </label>
       <p className="status">{status}</p>
       <p className={dragging ? 'hint hint-active' : 'hint'}>
-        ...or press Ctrl+V to paste, or drop an image here
+        ...or press Ctrl+V to paste, or drop an image here (file or another tab)
       </p>
       {preview && <img className="preview" src={preview} alt="source image" />}
       <textarea value={text} readOnly rows={10} placeholder="recognized text appears here" />
