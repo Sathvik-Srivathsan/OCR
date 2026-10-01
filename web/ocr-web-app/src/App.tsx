@@ -4,6 +4,15 @@ import './App.css'
 
 const MAX_DIM = 4000
 
+const LANGS = ['eng', 'hin', 'kan']
+
+const LOAD_PHASES = new Set([
+  'loading tesseract core',
+  'loading language traineddata',
+  'initializing tesseract',
+  'initializing api',
+])
+
 const IMAGE_EXT = /\.(avif|bmp|gif|jpe?g|png|tiff?|webp)$/i
 
 const isImage = (file: File | null | undefined): file is File => {
@@ -128,7 +137,38 @@ function App() {
   const [dragging, setDragging] = useState(false)
   const [prevUrl, setPrevUrl] = useState<string | null>(null)
   const [imgUrl, setImgUrl] = useState('')
-  const runRef = useRef<(file: File) => Promise<void>>(async () => {})
+  const [selected, setSelected] = useState<string[]>(['eng'])
+  const [langOpen, setLangOpen] = useState(false)
+  const [modelStatus, setModelStatus] = useState<string | null>(null)
+  const selectedRef = useRef<string[]>(['eng'])
+  const loadedLangs = useRef<Set<string>>(new Set(['eng']))
+  const runRef = useRef<(file: File, langs: string[]) => Promise<void>>(async () => {})
+
+  useEffect(() => {
+    selectedRef.current = selected
+  })
+
+  useEffect(() => {
+    if (!langOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setLangOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [langOpen])
+
+  const toggleLang = (lang: string) => {
+    const on = selected.includes(lang)
+    if (on && selected.length === 1) {
+      setStatus('at least one language must remain selected')
+      return
+    }
+    const next = on ? selected.filter((l) => l !== lang) : [...selected, lang]
+    setSelected(next)
+    setStatus('languages: ' + next.join(' + '))
+  }
+
+  const langLabel = 'Languages: ' + (selected.length ? selected.join(' + ') : 'none')
 
   const onUrl = (e: FormEvent) => {
     e.preventDefault()
@@ -139,7 +179,7 @@ function App() {
     }
     setStatus('fetching image link')
     void fileFromUrl(url)
-      .then((f) => run(f))
+      .then((f) => run(f, selectedRef.current))
       .catch((err: unknown) => {
         console.error(err)
         setStatus(urlLoadStatus(err))
@@ -154,13 +194,13 @@ function App() {
     if (file) {
       e.preventDefault()
       setStatus('added pasted image')
-      void run(file)
+      void run(file, selectedRef.current)
     } else {
       setStatus('clipboard has no image')
     }
   }
 
-  const run = async (file: File) => {
+  const run = async (file: File, langs: string[]) => {
     try {
       const url = URL.createObjectURL(file)
       if (prevUrl) URL.revokeObjectURL(prevUrl)
@@ -174,15 +214,25 @@ function App() {
         el.src = url
       })
       const canvas = upscale(img)
-      setStatus('loading Tesseract.js worker + eng')
-      const worker = await Tesseract.createWorker('eng', Tesseract.OEM.LSTM_ONLY, {
+      const missing = langs.filter((l) => !loadedLangs.current.has(l))
+      setStatus('loading Tesseract.js worker + ' + langs.join('+'))
+      if (missing.length) {
+        setModelStatus('loading OCR model data: ' + missing.join(' + '))
+      }
+      const worker = await Tesseract.createWorker(langs, Tesseract.OEM.LSTM_ONLY, {
         logger: (m) => {
           console.log(m.status, Math.round(m.progress * 100) + '%')
-          setStatus(m.status + ' ' + Math.round(m.progress * 100) + '%')
+          if (m.status === 'recognizing text') {
+            setStatus(m.status + ' ' + Math.round(m.progress * 100) + '%')
+          } else if (LOAD_PHASES.has(m.status)) {
+            setModelStatus(m.status + ' ' + Math.round(m.progress * 100) + '%')
+          }
         },
       })
+      missing.forEach((l) => loadedLangs.current.add(l))
+      setModelStatus(null)
       try {
-        setStatus('pass 1 of 2: PSM SINGLE_BLOCK')
+        setStatus('pass 1 of 2: PSM SINGLE_BLOCK [' + langs.join('+') + ']')
         await worker.setParameters({
           tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK,
           preserve_interword_spaces: '1',
@@ -211,7 +261,7 @@ function App() {
         console.log(winner.label, 'wins')
         console.log(winner.text)
         setText(winner.text)
-        setStatus('done: ' + winner.label + ' conf ' + winner.confidence.toFixed(0))
+        setStatus('done: ' + winner.label + ' conf ' + winner.confidence.toFixed(0) + ' [' + langs.join('+') + ']')
       } finally {
         await worker.terminate()
       }
@@ -237,14 +287,14 @@ function App() {
         files?.[0] ?? dt?.items?.[0]?.getAsFile() ?? undefined
       if (isImage(file)) {
         setStatus('added dropped image')
-        void runRef.current(file)
+        void runRef.current(file, selectedRef.current)
         return
       }
       const url = dt ? imgUrlFromDrop(dt) : undefined
       if (url) {
         setStatus('added dropped image link')
         void fileFromUrl(url)
-          .then((f) => runRef.current(f))
+          .then((f) => runRef.current(f, selectedRef.current))
           .catch((err: unknown) => {
             console.error(err)
             setStatus(urlLoadStatus(err))
@@ -294,7 +344,7 @@ function App() {
             const file = e.target.files?.[0]
             if (isImage(file)) {
               setStatus('added file')
-              void run(file)
+              void run(file, selectedRef.current)
             } else {
               setStatus('not an image file')
             }
@@ -311,6 +361,35 @@ function App() {
         />
         <button type="submit">load from URL</button>
       </form>
+      <div className="lang">
+        <button
+          type="button"
+          className="lang-toggle"
+          onClick={() => setLangOpen((o) => !o)}
+        >
+          {langLabel} ▾
+        </button>
+        {langOpen && (
+          <div className="lang-panel">
+            {LANGS.map((lang) => (
+              <label key={lang} className="lang-row">
+                <input
+                  type="checkbox"
+                  checked={selected.includes(lang)}
+                  onChange={() => toggleLang(lang)}
+                />
+                <span className="lang-code">{lang}</span>
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+      {modelStatus && (
+        <p className="modload">
+          <span className="spinner" aria-hidden="true" />
+          {modelStatus}
+        </p>
+      )}
       <p className="status">{statusMain}
         {statusAdvice.length > 0 && (
           <>

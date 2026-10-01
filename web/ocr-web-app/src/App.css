@@ -32,6 +32,76 @@
   color: var(--muted, #889);
 }
 
+.lang {
+  position: relative;
+  align-self: flex-start;
+}
+
+.lang-toggle {
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--accent, #446);
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+
+.lang-panel {
+  position: absolute;
+  z-index: 2;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 160px;
+  background: var(--bg, #fff);
+  border: 1px solid var(--accent, #446);
+  border-radius: 6px;
+  padding: 0.5rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.lang-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.lang-row:hover {
+  background: color-mix(in srgb, var(--accent, #446) 12%, transparent);
+}
+
+.lang-code {
+  font-family: monospace;
+}
+
+.modload {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  font-family: monospace;
+  color: var(--muted, #889);
+  margin: 0;
+}
+
+.spinner {
+  width: 1em;
+  height: 1em;
+  flex: none;
+  border: 2px solid var(--muted, #889);
+  border-top-color: var(--accent, #668);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .url {
   display: flex;
   gap: 0.5rem;
