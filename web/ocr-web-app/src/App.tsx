@@ -13,6 +13,20 @@ const LOAD_PHASES = new Set([
   'initializing api',
 ])
 
+const SCRIPT_LANGS: Array<{ re: RegExp; lang: string }> = [
+  { re: /Devanagari/i, lang: 'hin' },
+  { re: /Kannada/i, lang: 'kan' },
+]
+
+const detectLangs = async (canvas: HTMLCanvasElement): Promise<string[]> => {
+  const det = (await Tesseract.detect(canvas)) as unknown as {
+    data?: { script?: string }
+  }
+  const script = det?.data?.script ?? ''
+  const found = SCRIPT_LANGS.filter((s) => s.re.test(script)).map((s) => s.lang)
+  return ['eng', ...found.filter((l) => l !== 'eng')]
+}
+
 const IMAGE_EXT = /\.(avif|bmp|gif|jpe?g|png|tiff?|webp)$/i
 
 const isImage = (file: File | null | undefined): file is File => {
@@ -101,7 +115,33 @@ const medianCharWidth = (words: Array<{ bbox: [number, number, number, number]; 
   return widths.length ? widths[Math.floor(widths.length / 2)] : 0
 }
 
-const fromHocr = (hocr: string, fallback: string): string => {
+const wordLang = (text: string): string | null => {
+  const votes = new Map<string, number>()
+  for (const ch of text) {
+    const code = ch.codePointAt(0) ?? 0
+    let lang: string | null = null
+    if (code >= 0x0900 && code <= 0x097f) lang = 'hin'
+    else if (code >= 0x0c80 && code <= 0x0cff) lang = 'kan'
+    else if (
+      (code >= 0x41 && code <= 0x5a) ||
+      (code >= 0x61 && code <= 0x7a) ||
+      (code >= 0x00c0 && code <= 0x024f)
+    )
+      lang = 'eng'
+    if (lang) votes.set(lang, (votes.get(lang) ?? 0) + 1)
+  }
+  let best: string | null = null
+  let bestN = 0
+  votes.forEach((n, lang) => {
+    if (n > bestN) {
+      bestN = n
+      best = lang
+    }
+  })
+  return best
+}
+
+const fromHocr = (hocr: string, fallback: string, allowed: Set<string> | null): string => {
   const doc = new DOMParser().parseFromString(hocr, 'text/html')
   const lines = Array.from(doc.querySelectorAll('.ocr_line'))
   if (!lines.length) return fallback
@@ -116,6 +156,11 @@ const fromHocr = (hocr: string, fallback: string): string => {
         }
       })
       .filter((w) => w.text.length)
+      .filter((w) => {
+        if (!allowed) return true
+        const lang = wordLang(w.text)
+        return lang === null || allowed.has(lang)
+      })
     if (!words.length) continue
     const mw = medianCharWidth(words)
     const parts: string[] = []
@@ -137,11 +182,11 @@ function App() {
   const [dragging, setDragging] = useState(false)
   const [prevUrl, setPrevUrl] = useState<string | null>(null)
   const [imgUrl, setImgUrl] = useState('')
-  const [selected, setSelected] = useState<string[]>(['eng'])
+  const [selected, setSelected] = useState<string[]>([])
   const [langOpen, setLangOpen] = useState(false)
   const [modelStatus, setModelStatus] = useState<string | null>(null)
-  const selectedRef = useRef<string[]>(['eng'])
-  const loadedLangs = useRef<Set<string>>(new Set(['eng']))
+  const selectedRef = useRef<string[]>([])
+  const loadedLangs = useRef<Set<string>>(new Set())
   const runRef = useRef<(file: File, langs: string[]) => Promise<void>>(async () => {})
 
   useEffect(() => {
@@ -159,16 +204,12 @@ function App() {
 
   const toggleLang = (lang: string) => {
     const on = selected.includes(lang)
-    if (on && selected.length === 1) {
-      setStatus('at least one language must remain selected')
-      return
-    }
     const next = on ? selected.filter((l) => l !== lang) : [...selected, lang]
     setSelected(next)
-    setStatus('languages: ' + next.join(' + '))
+    setStatus(next.length ? 'languages: ' + next.join(' + ') : 'languages: auto')
   }
 
-  const langLabel = 'Languages: ' + (selected.length ? selected.join(' + ') : 'none')
+  const langLabel = selected.length ? 'Languages: ' + selected.join(' + ') : 'Languages: auto'
 
   const onUrl = (e: FormEvent) => {
     e.preventDefault()
@@ -214,12 +255,24 @@ function App() {
         el.src = url
       })
       const canvas = upscale(img)
-      const missing = langs.filter((l) => !loadedLangs.current.has(l))
-      setStatus('loading Tesseract.js worker + ' + langs.join('+'))
+      let effective = langs
+      if (!effective.length) {
+        setStatus('detecting scripts...')
+        try {
+          effective = await detectLangs(canvas)
+          setStatus('detected: ' + effective.join(' + '))
+        } catch (err) {
+          console.error(err)
+          effective = ['eng']
+          setStatus('script detection failed - using eng')
+        }
+      }
+      const missing = effective.filter((l) => !loadedLangs.current.has(l))
+      setStatus('loading Tesseract.js worker + ' + effective.join('+'))
       if (missing.length) {
         setModelStatus('loading OCR model data: ' + missing.join(' + '))
       }
-      const worker = await Tesseract.createWorker(langs, Tesseract.OEM.LSTM_ONLY, {
+      const worker = await Tesseract.createWorker(effective, Tesseract.OEM.LSTM_ONLY, {
         logger: (m) => {
           console.log(m.status, Math.round(m.progress * 100) + '%')
           if (m.status === 'recognizing text') {
@@ -232,7 +285,7 @@ function App() {
       missing.forEach((l) => loadedLangs.current.add(l))
       setModelStatus(null)
       try {
-        setStatus('pass 1 of 2: PSM SINGLE_BLOCK [' + langs.join('+') + ']')
+        setStatus('pass 1 of 2: PSM SINGLE_BLOCK [' + effective.join('+') + ']')
         await worker.setParameters({
           tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK,
           preserve_interword_spaces: '1',
@@ -248,12 +301,12 @@ function App() {
           {
             label: 'SINGLE_BLOCK',
             confidence: pass1.data.confidence,
-            text: fromHocr(pass1.data.hocr || '', pass1.data.text),
+            text: fromHocr(pass1.data.hocr || '', pass1.data.text, langs.length ? new Set(langs) : null),
           },
           {
             label: 'AUTO',
             confidence: pass2.data.confidence,
-            text: fromHocr(pass2.data.hocr || '', pass2.data.text),
+            text: fromHocr(pass2.data.hocr || '', pass2.data.text, langs.length ? new Set(langs) : null),
           },
         ]
         results.forEach((r) => console.log(r.label, 'conf', r.confidence))
@@ -261,7 +314,7 @@ function App() {
         console.log(winner.label, 'wins')
         console.log(winner.text)
         setText(winner.text)
-        setStatus('done: ' + winner.label + ' conf ' + winner.confidence.toFixed(0) + ' [' + langs.join('+') + ']')
+        setStatus('done: ' + winner.label + ' conf ' + winner.confidence.toFixed(0) + ' [' + effective.join('+') + ']')
       } finally {
         await worker.terminate()
       }
