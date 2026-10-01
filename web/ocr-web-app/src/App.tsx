@@ -179,6 +179,7 @@ function App() {
   const [text, setText] = useState('')
   const [preview, setPreview] = useState('')
   const [status, setStatus] = useState('waiting for an image')
+  const [hasResult, setHasResult] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [prevUrl, setPrevUrl] = useState<string | null>(null)
   const [imgUrl, setImgUrl] = useState('')
@@ -187,6 +188,9 @@ function App() {
   const [modelStatus, setModelStatus] = useState<string | null>(null)
   const selectedRef = useRef<string[]>([])
   const loadedLangs = useRef<Set<string>>(new Set())
+  const lastFile = useRef<File | null>(null)
+  const lastLangs = useRef<string[]>([])
+  const [busy, setBusy] = useState(false)
   const runRef = useRef<(file: File, langs: string[]) => Promise<void>>(async () => {})
 
   useEffect(() => {
@@ -243,6 +247,9 @@ function App() {
 
   const run = async (file: File, langs: string[]) => {
     try {
+      if (file !== lastFile.current) setHasResult(false)
+      lastFile.current = file
+      setBusy(true)
       const url = URL.createObjectURL(file)
       if (prevUrl) URL.revokeObjectURL(prevUrl)
       setPrevUrl(url)
@@ -267,6 +274,7 @@ function App() {
           setStatus('script detection failed - using eng')
         }
       }
+      lastLangs.current = effective
       const missing = effective.filter((l) => !loadedLangs.current.has(l))
       setStatus('loading Tesseract.js worker + ' + effective.join('+'))
       if (missing.length) {
@@ -314,6 +322,7 @@ function App() {
         console.log(winner.label, 'wins')
         console.log(winner.text)
         setText(winner.text)
+        setHasResult(true)
         setStatus('done: ' + winner.label + ' conf ' + winner.confidence.toFixed(0) + ' [' + effective.join('+') + ']')
       } finally {
         await worker.terminate()
@@ -321,7 +330,27 @@ function App() {
     } catch (err) {
       console.error(err)
       setStatus('failed: ' + (err instanceof Error ? err.message : String(err)))
+    } finally {
+      setBusy(false)
     }
+  }
+
+  const onRerun = () => {
+    const file = lastFile.current
+    if (!file || busy) return
+    const cur = selectedRef.current
+    const prev = lastLangs.current
+    const key = (a: string[]) => [...a].sort().join('+')
+    if (!cur.length && !prev.length) {
+      setStatus('re-running auto...')
+    } else if (key(cur) === key(prev)) {
+      setStatus('re-running [' + cur.join('+') + ']...')
+    } else {
+      setStatus(
+        'language stack changed: [' + (key(prev) || 'auto') + '] -> [' + (key(cur) || 'auto') + ']',
+      )
+    }
+    void run(file, cur)
   }
 
   useEffect(() => {
@@ -451,6 +480,11 @@ function App() {
           </>
         )}
       </p>
+      {hasResult && (
+        <button type="button" className="rerun" onClick={onRerun} disabled={busy}>
+          re-run OCR
+        </button>
+      )}
       <p className={dragging ? 'hint hint-active' : 'hint'}>
         ...or press Ctrl+V to paste, or drop an image here (file or another tab)
       </p>

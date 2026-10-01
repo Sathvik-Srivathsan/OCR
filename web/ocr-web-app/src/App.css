@@ -77,6 +77,22 @@
   font-family: monospace;
 }
 
+.rerun {
+  align-self: flex-start;
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--accent, #446);
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+
+.rerun:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .modload {
   display: flex;
   gap: 0.5rem;
